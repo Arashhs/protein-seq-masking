@@ -26,7 +26,7 @@ class AminoAcidTokenizer:
         
         # Encode sequence and update attention mask
         for i, aa in enumerate(sequence[:self.max_seq_length-2]):
-            encoded.append(self.vocab[aa])
+            encoded.append(self.vocab.get(aa, 0))
             attention_mask[i + 1] = 1  # Mark this token as attended to
         
         encoded.append(self.vocab.get('[SEP]', 2))  # End of sequence token
