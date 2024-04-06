@@ -1,23 +1,29 @@
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from data.dataloader import AminoAcidTokenizer, ProteinDataset
-from data.utils import load_train_data, load_test_data
-
-
-from transformers import BertForMaskedLM, BertConfig
-
-from args import parse_args
-
 from tqdm import tqdm
 import pandas as pd
+from datetime import datetime 
+from transformers import BertForMaskedLM, BertConfig
+import json
+
+from args import parse_args
+from data.utils import load_train_data, load_test_data
+from utils.logger import WandbLogger
 
 
 
 def main(args):
+    args.run_name = f'{args.run_name}_{str(datetime.now().strftime("%Y-%m-%d %H:%M"))}'
+    wandb_logger = WandbLogger(is_used=args.use_wandb, entity=args.wandb_entity, project=args.wandb_project, name=args.run_name)
+    # log hyperparameters
+    print('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
+    wandb_logger.log_hyperparams(args)
+    
     # Load data
     train_sequences = load_train_data(args.data_dir + '/train.csv')
-    val_sequences, val_labels, val_masks = load_test_data(args.max_seq_len, args.data_dir, prefix='val')
-    test_sequences, test_labels, test_masks = load_test_data(args.max_seq_len, args.data_dir, prefix='test')
+    val_sequences, val_labels, val_masks = load_test_data(args.max_seq_len, args.data_dir, prefix='val', device=args.device)
+    test_sequences, test_labels, test_masks = load_test_data(args.max_seq_len, args.data_dir, prefix='test', device=args.device)
     
     # Initialize tokenizer
     tokenizer = AminoAcidTokenizer(max_seq_length=args.max_seq_len)
@@ -26,8 +32,13 @@ def main(args):
     train_dataset = ProteinDataset(train_sequences, tokenizer, mask_probability=args.mask_probability, max_len=args.max_seq_len)
     val_dataset = TensorDataset(val_sequences, val_masks, val_labels)
     test_dataset = TensorDataset(test_sequences, test_masks, test_labels)
-
     
+    # print length of the datasets
+    print('Length of the train dataset:', len(train_dataset))
+    print('Length of the validation dataset:', len(val_dataset))
+    print('Length of the test dataset:', len(test_dataset))
+    
+   
     # Initialize dataloader
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size)
@@ -40,11 +51,13 @@ def main(args):
                         num_attention_heads=args.num_attention_heads, 
                         intermediate_size=args.intermediate_size)
     
-    model = BertForMaskedLM(config)
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-
+    model = BertForMaskedLM(config).to(args.device)
+    
+    # print the number of model parameters
+    print('Size of the model:', (sum(p.numel() for p in model.parameters())*4)/(1024**3) , 'GB')
+    print('Number of parameters:', sum(p.numel() for p in model.parameters()))
+    
+    
     # Initialize optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     
@@ -54,7 +67,7 @@ def main(args):
         total_loss = 0
         for batch in tqdm(train_dataloader):
             inputs, attention_mask, targets = batch['input_ids'], batch['attention_mask'], batch['labels']
-            inputs, attention_mask, targets = inputs.to(device), attention_mask.to(device), targets.to(device)
+            inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
             # Forward pass
             outputs = model(inputs, attention_mask=attention_mask, labels=targets)
             loss = outputs.loss
