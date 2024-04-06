@@ -13,6 +13,66 @@ from utils.logger import WandbLogger
 
 
 
+
+
+def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    model.float()
+    
+    # put the model in training mode
+    wandb_logger.watch_model(model)
+    
+    step = 0
+    print(f'Start training on {len(train_dataloader.dataset)} samples.')
+    
+    for epoch in range(args.num_epochs):
+        total_loss = 0
+
+        model.train()
+        for batch in tqdm(train_dataloader):
+            inputs, attention_mask, targets = batch['input_ids'], batch['attention_mask'], batch['labels']
+            inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
+            
+            # Clear the gradients
+            optimizer.zero_grad()
+
+            # Forward pass
+            outputs = model(inputs, attention_mask=attention_mask, labels=targets)
+
+            loss = outputs.loss
+            total_loss += loss.item()
+
+            # Backward pass and step
+            loss.backward()
+            optimizer.step()
+
+            # Log the loss
+            step += args.batch_size
+            wandb_logger.log('train/loss', loss.item(), step)
+            wandb_logger.log('train/learning_rate', optimizer.param_groups[0]['lr'], step)
+
+            total_loss += loss.item()
+
+
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for batch in val_dataloader:
+                inputs, attention_mask, targets = batch
+                inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
+                
+                outputs = model(inputs, attention_mask=attention_mask, labels=targets)
+                loss = outputs.loss
+                total_val_loss += loss.item()
+                
+        validation_loss = total_val_loss/ len(val_dataloader)
+
+        wandb_logger.log('val/loss', validation_loss, step)
+        print(f"Epoch {epoch+1}/{args.num_epochs}, Loss (train): {total_loss/ len(train_dataloader)}, Loss (val): {validation_loss}")
+
+
+
+
 def main(args):
     args.run_name = f'{args.run_name}_{str(datetime.now().strftime("%Y-%m-%d %H:%M"))}'
     wandb_logger = WandbLogger(is_used=args.use_wandb, entity=args.wandb_entity, project=args.wandb_project, name=args.run_name)
@@ -57,9 +117,12 @@ def main(args):
     print('Size of the model:', (sum(p.numel() for p in model.parameters())*4)/(1024**3) , 'GB')
     print('Number of parameters:', sum(p.numel() for p in model.parameters()))
     
+    train(train_dataloader, val_dataloader, model, args, wandb_logger=wandb_logger)
+    
     
     # Initialize optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    
     
     # Iterate over the dataset
     for epoch in range(args.num_epochs):
