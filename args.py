@@ -4,8 +4,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Masked Protein Modeling')
     
     # Data arguments
-    parser.add_argument('--data_path', type=str, default='dataset/prot-300.csv', help='Path to the dataset csv file')
-    parser.add_argument('--max_seq_len', type=int, default=200, help='Maximum protein sequence length in the dataset')
+    parser.add_argument('--data_dir', type=str, default='dataset/splitted', help='Path to the directory containing train csv and test/val pt files')
+    parser.add_argument('--max_seq_len', type=int, default=100, help='Maximum protein sequence length in the dataset')
     parser.add_argument('--mask_probability', type=float, default=0.15, help='Probability of masking tokens in the input sequence')
 
     # Model arguments

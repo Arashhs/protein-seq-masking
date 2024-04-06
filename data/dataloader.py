@@ -26,7 +26,7 @@ class AminoAcidTokenizer:
         
         # Encode sequence and update attention mask
         for i, aa in enumerate(sequence[:self.max_seq_length-2]):
-            encoded.append(self.vocab.get(aa, 0))
+            encoded.append(self.vocab[aa])
             attention_mask[i + 1] = 1  # Mark this token as attended to
         
         encoded.append(self.vocab.get('[SEP]', 2))  # End of sequence token
@@ -45,24 +45,34 @@ class AminoAcidTokenizer:
 
 
 class ProteinDataset(Dataset):
-
-    def __init__(self, sequences, tokenizer, mask_probability=0.15):
-        self.sequences = sequences
+    def __init__(self, sequences, tokenizer, mask_probability=0.15, min_len=None, max_len=None):
         self.tokenizer = tokenizer
         self.mask_probability = mask_probability
+        self.min_len = min_len
+        self.max_len = max_len
+
+        # Filter sequences based on length
+        if min_len is not None or max_len is not None:
+            self.sequences = [seq for seq in sequences if self.is_within_length(seq)]
+        else:
+            self.sequences = sequences
+
+    def is_within_length(self, sequence):
+        # Check if sequence length is within specified range
+        return (self.min_len is None or len(sequence) >= self.min_len) and (self.max_len is None or len(sequence) <= self.max_len)
+
+    def random_masking(self, encoded_sequence):
+        inputs = encoded_sequence.copy()
+        targets = encoded_sequence.copy()
+        for i, token in enumerate(encoded_sequence):
+            if token not in [self.tokenizer.special_tokens['[PAD]'], self.tokenizer.special_tokens['[CLS]'], self.tokenizer.special_tokens['[SEP]']] and random.random() < self.mask_probability:
+                inputs[i] = self.tokenizer.vocab['[MASK]']
+                targets[i] = token
+        return inputs, targets
 
     def __len__(self):
         return len(self.sequences)
 
-    def random_masking(self, encoded_sequence):
-        inputs = encoded_sequence.copy()
-        targets = inputs.copy()  # Default ignore index
-        for i, token in enumerate(encoded_sequence):
-            if token not in [0, 1, 2] and random.random() < self.mask_probability:  # Don't mask special tokens
-                inputs[i] = self.tokenizer.vocab['[MASK]']
-                targets[i] = token
-        return inputs, targets
-    
     def __getitem__(self, idx):
         sequence = self.sequences[idx]
         encoded_sequence, attention_mask = self.tokenizer.encode(sequence)
