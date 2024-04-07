@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime 
 from transformers import BertForMaskedLM, BertConfig
 import json
+from pathlib import Path
 
 from args import parse_args
 from data.utils import load_train_data, load_test_data
@@ -13,11 +14,43 @@ from utils.logger import WandbLogger
 
 
 
+class LossCheckpointer:
+
+    def __init__(self, run_id) -> None:
+        self.best_loss = None
+        self.run_id = run_id
+
+        self.best_model_path = Path('checkpoints') / run_id
+        self.best_model_path.mkdir(parents=True, exist_ok=True)
+        self.best_model_path = self.best_model_path / 'best_model.pt'
+
+    def _save_checkpoint(self, model, optimizer, epoch, loss):
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, self.best_model_path )
+        
+    def load_best_model_checkpoint(self, model):
+        checkpoint = torch.load(self.best_model_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        return model
+    
+    def epoch_done(self, model, optimizer, epoch, loss):
+        # save the model if the loss is the best so far or the first epoch
+        if self.best_loss is None or loss < self.best_loss:
+            self.best_loss = loss
+            self._save_checkpoint(model, optimizer, epoch, loss)
+            print('Checkpoint saved at epoch', epoch)
+
 
 
 def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     model.float()
+    
+    loss_checkpointer = LossCheckpointer(args.run_name)
     
     # put the model in training mode
     wandb_logger.watch_model(model)
@@ -25,7 +58,12 @@ def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
     step = 0
     print(f'Start training on {len(train_dataloader.dataset)} samples.')
     
+    # Start time of the entire training
+    training_start_time = datetime.now()
+    
     for epoch in range(args.num_epochs):
+        start_time = datetime.now()  # Start time of the epoch
+        
         total_loss = 0
 
         model.train()
@@ -52,12 +90,28 @@ def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
             wandb_logger.log('train/learning_rate', optimizer.param_groups[0]['lr'], step)
 
             total_loss += loss.item()
-
-
+            
+            
+        end_time = datetime.now()  # End time of the epoch
+        epoch_duration = (end_time - start_time).total_seconds()
+        total_training_duration = (end_time - training_start_time).total_seconds()
+        wandb_logger.log('train/epoch_duration', epoch_duration, epoch)
+        wandb_logger.log('train/total_training_duration', total_training_duration, epoch)
+        
+        # Log memory utilization here
+        if torch.cuda.is_available():
+            current_memory_gb = torch.cuda.memory_allocated() / (1024 ** 3)  # Convert bytes to GB
+            peak_memory_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert bytes to GB
+            wandb_logger.log('cuda/current_memory_gb', current_memory_gb, step)
+            wandb_logger.log('cuda/peak_memory_gb', peak_memory_gb, step)
+            print(f"Epoch {epoch+1}: Current GPU Memory Utilization (GB): {current_memory_gb}, Peak GPU Memory Utilization (GB): {peak_memory_gb}")
+            
+        print('Training done, validating...')
+        
         model.eval()
         total_val_loss = 0
         with torch.no_grad():
-            for batch in val_dataloader:
+            for batch in tqdm(val_dataloader):
                 inputs, attention_mask, targets = batch
                 inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
                 
@@ -69,6 +123,33 @@ def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
 
         wandb_logger.log('val/loss', validation_loss, step)
         print(f"Epoch {epoch+1}/{args.num_epochs}, Loss (train): {total_loss/ len(train_dataloader)}, Loss (val): {validation_loss}")
+        
+        loss_checkpointer.epoch_done(model, optimizer, epoch, validation_loss)
+        
+    print('Finished training')
+    wandb_logger.log('train/total_training_time', total_training_duration, 0)
+    print(f"Total training time: {total_training_duration} seconds")
+    
+    return loss_checkpointer.load_best_model_checkpoint(model)
+
+
+
+def test(test_dataloader, model, args, wandb_logger=None):
+    model.eval()
+    total_test_loss = 0
+    with torch.no_grad():
+        for batch in tqdm(test_dataloader):
+            inputs, attention_mask, targets = batch
+            inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
+
+            outputs = model(inputs, attention_mask=attention_mask, labels=targets)
+            loss = outputs.loss
+            total_test_loss += loss.item()
+
+    test_loss = total_test_loss/ len(test_dataloader)
+    print(f"Test Loss: {test_loss}")
+    wandb_logger.log('test/loss', test_loss, 0)
+    
 
 
 
@@ -115,34 +196,18 @@ def main(args):
     
     # print the number of model parameters
     print('Size of the model:', (sum(p.numel() for p in model.parameters())*4)/(1024**3) , 'GB')
-    print('Number of parameters:', sum(p.numel() for p in model.parameters()))
+    print(f'Number of parameters: {sum(p.numel() for p in model.parameters()):,}')
     
-    train(train_dataloader, val_dataloader, model, args, wandb_logger=wandb_logger)
-    
-    
-    # Initialize optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    
-    
-    # Iterate over the dataset
-    for epoch in range(args.num_epochs):
-        print(f'Epoch {epoch + 1}')
-        total_loss = 0
-        for batch in tqdm(train_dataloader):
-            inputs, attention_mask, targets = batch['input_ids'], batch['attention_mask'], batch['labels']
-            inputs, attention_mask, targets = inputs.to(args.device), attention_mask.to(args.device), targets.to(args.device)
-            # Forward pass
-            outputs = model(inputs, attention_mask=attention_mask, labels=targets)
-            loss = outputs.loss
-            total_loss += loss.item()
-            # Backward pass
-            loss.backward()
-            print(loss)
-            # Update weights
-            optimizer.step()
-            # Clear gradients
-            optimizer.zero_grad()
-        print(f'Total loss: {total_loss}')
+    try:    
+        best_model = train(train_dataloader, val_dataloader, model, args, wandb_logger=wandb_logger)
+    except KeyboardInterrupt:
+        loss_checkpointer = LossCheckpointer(args.run_name)
+        best_model = loss_checkpointer.load_best_model_checkpoint(model)
+        print('-' * 80)
+        print('Exiting training early.')
+    print('Evaluation on test set...')
+    test(test_dataloader, best_model, args, wandb_logger=wandb_logger)
+
     
 
 
