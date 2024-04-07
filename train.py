@@ -155,7 +155,7 @@ def test(test_dataloader, model, args, wandb_logger=None):
 
 
 def main(args):
-    args.run_name = f'{args.run_name}_{str(datetime.now().strftime("%Y-%m-%d %H:%M"))}'
+    args.run_name = f'{args.run_name}_maxSeq{args.max_seq_len}-{str(datetime.now().strftime("%Y-%m-%d %H:%M"))}'
     wandb_logger = WandbLogger(is_used=args.use_wandb, entity=args.wandb_entity, project=args.wandb_project, name=args.run_name)
     # log hyperparameters
     print('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
@@ -170,7 +170,7 @@ def main(args):
     tokenizer = AminoAcidTokenizer(max_seq_length=args.max_seq_len)
     
     # Initialize dataset
-    train_dataset = ProteinDataset(train_sequences, tokenizer, mask_probability=args.mask_probability, max_len=args.max_seq_len)
+    train_dataset = ProteinDataset(train_sequences, tokenizer, mask_probability=args.mask_probability)
     val_dataset = TensorDataset(val_sequences, val_masks, val_labels)
     test_dataset = TensorDataset(test_sequences, test_masks, test_labels)
     
