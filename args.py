@@ -38,9 +38,9 @@ def parse_args():
 
 
     # Training arguments
-    parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for training')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate for training')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Which device to use (CUDA or CPU).')
     
     # Logging args

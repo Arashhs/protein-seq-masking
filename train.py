@@ -14,6 +14,32 @@ from utils.logger import WandbLogger
 
 
 
+
+def calculate_accuracy(model, dataloader, mask_token_id=3):
+    model.eval()
+    total_correct = 0
+    total_masked = 0  # Keep track of the total number of masked tokens
+    
+    with torch.no_grad():
+        for seq, mask, labels in tqdm(dataloader):
+            outputs = model(input_ids=seq, attention_mask=mask, labels=labels)
+            logits = outputs.logits  # Assuming this is [batch_size, sequence_length, num_classes]
+            
+            masked_positions = seq == mask_token_id  # Find positions of the mask token
+            masked_logits = logits[masked_positions.unsqueeze(-1).expand_as(logits)].view(-1, logits.size(-1))  # Filter logits at masked positions
+            masked_targets = labels[masked_positions]  # Filter targets at masked positions
+            
+            _, predicted_labels = torch.max(masked_logits, dim=1)  # Get the predicted labels
+            correct_predictions = (predicted_labels == masked_targets).float()  # Find correct predictions
+            
+            total_correct += correct_predictions.sum().item()  # Update total correct predictions
+            total_masked += masked_targets.size(0)  # Update total number of masked tokens
+
+    accuracy = total_correct / total_masked if total_masked > 0 else 0  # Compute overall accuracy
+    return accuracy
+
+
+
 class LossCheckpointer:
 
     def __init__(self, run_id) -> None:
@@ -120,9 +146,11 @@ def train(train_dataloader, val_dataloader, model, args, wandb_logger=None):
                 total_val_loss += loss.item()
                 
         validation_loss = total_val_loss/ len(val_dataloader)
+        validation_accuracy = calculate_accuracy(model, val_dataloader)
 
         wandb_logger.log('val/loss', validation_loss, step)
-        print(f"Epoch {epoch+1}/{args.num_epochs}, Loss (train): {total_loss/ len(train_dataloader)}, Loss (val): {validation_loss}")
+        wandb_logger.log('val/accuracy', validation_accuracy, step)
+        print(f"Epoch {epoch+1}/{args.num_epochs}, Loss (train): {total_loss/ len(train_dataloader)}, Loss (val): {validation_loss}, Accuracy (val): {validation_accuracy}")
         
         loss_checkpointer.epoch_done(model, optimizer, epoch, validation_loss)
         
@@ -147,8 +175,10 @@ def test(test_dataloader, model, args, wandb_logger=None):
             total_test_loss += loss.item()
 
     test_loss = total_test_loss/ len(test_dataloader)
-    print(f"Test Loss: {test_loss}")
+    test_accuracy = calculate_accuracy(model, test_dataloader)
+    print(f"Test Loss: {test_loss}, Test Accuracy: {test_accuracy}")
     wandb_logger.log('test/loss', test_loss, 0)
+    wandb_logger.log('test/accuracy', test_accuracy, 0)
     
 
 

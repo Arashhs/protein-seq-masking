@@ -2,6 +2,8 @@ import random
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+import copy
+
 
 class AminoAcidTokenizer:
     def __init__(self, max_seq_length=500):
@@ -62,8 +64,8 @@ class ProteinDataset(Dataset):
         return (self.min_len is None or len(sequence) >= self.min_len) and (self.max_len is None or len(sequence) <= self.max_len)
 
     def random_masking(self, encoded_sequence):
-        inputs = encoded_sequence.copy()
-        targets = encoded_sequence.copy()
+        inputs = copy.deepcopy(encoded_sequence)
+        targets = copy.deepcopy(encoded_sequence)
         for i, token in enumerate(encoded_sequence):
             if token not in [self.tokenizer.special_tokens['[PAD]'], self.tokenizer.special_tokens['[CLS]'], self.tokenizer.special_tokens['[SEP]']] and random.random() < self.mask_probability:
                 inputs[i] = self.tokenizer.vocab['[MASK]']
